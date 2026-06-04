@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Python caches/artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pycache_tmp/
+Library/
+.cache/
+.matplotlib/
+.mplconfig/
+
+# Pipeline parameter/config variants (excluded for first code-only upload)
+params_*.py
+DP09_CTD_params/
+EV DVM Params/
+
+# Input data (excluded for first code-only upload)
+EV DVM Echograms/
+
+# Generated outputs/results
+Figures/
+Batch Results/
+DP08 Figures/
+DP09 Figures/
