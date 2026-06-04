@@ -24,3 +24,7 @@ Figures/
 Batch Results/
 DP08 Figures/
 DP09 Figures/
+
+# Local-only helper scripts (kept on machine, not uploaded)
+sv_csv_echogram_reader.py
+test_csv_outputs.py
