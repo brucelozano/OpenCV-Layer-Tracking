@@ -1,0 +1,10 @@
+# Core scientific/data stack
+numpy
+pandas
+matplotlib
+
+# Computer vision
+opencv-python
+
+# Optional but recommended (enhanced resampling helpers in dsl_tracking.py)
+scipy
