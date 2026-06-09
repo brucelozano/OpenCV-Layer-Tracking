@@ -113,6 +113,17 @@ DSL_MORPH_KERNEL_SIZE = (2, 2)
 DSL_MORPH_CLOSE_ITERATIONS = 1
 DSL_MORPH_OPEN_ITERATIONS = 1
 
+# Optional wavelet preprocessing before threshold-based contour detection.
+# Keep disabled by default so baseline behavior is unchanged.
+ENABLE_WAVELET_PREPROCESS = False
+WAVELET_NAME = "db4"
+WAVELET_LEVELS = 3
+WAVELET_THRESHOLD_MODE = "soft"  # "soft" or "hard"
+WAVELET_THRESHOLD_SCALE = 1.0
+WAVELET_CLIP_MIN = -90.0
+WAVELET_CLIP_MAX = -30.0
+WAVELET_APPLY_TO_SECOND_PASS = False
+
 # --- Optional second pass (diffuse layers) ---
 EXPORT_BOOLEAN_CSV = False
 ENABLE_SECOND_PASS = True

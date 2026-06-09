@@ -14,6 +14,12 @@ except ImportError:
     HAS_SCIPY = False
     print("Warning: scipy not available. Enhanced resampling features disabled.")
 
+try:
+    import pywt
+    HAS_PYWT = True
+except ImportError:
+    HAS_PYWT = False
+
 def save_debug_image(image_data, title, filename, figures_dir, cmap='gray', vmin=None, vmax=None):
     """Helper function to save debug images.
     
@@ -805,6 +811,106 @@ def enhance_resampled_data(sv_data, dsl_sv_threshold_min, dsl_sv_threshold_max, 
         enhanced_data = np.clip(enhanced_data, -90, -30)
     
     return enhanced_data
+
+
+def wavelet_denoise_sv(
+    sv_data,
+    wavelet_name="db4",
+    levels=3,
+    threshold_mode="soft",
+    threshold_scale=1.0,
+    clip_min=-90.0,
+    clip_max=-30.0,
+):
+    """
+    Apply 2D wavelet denoising to Sv data while preserving layer boundaries.
+
+    Args:
+        sv_data: 2D float Sv array.
+        wavelet_name: PyWavelets family name (e.g., "db4", "bior4.4").
+        levels: Decomposition levels (clamped to valid range for image size).
+        threshold_mode: Detail threshold mode ("soft" or "hard").
+        threshold_scale: Multiplier on universal MAD threshold.
+        clip_min: Lower Sv clip after reconstruction.
+        clip_max: Upper Sv clip after reconstruction.
+
+    Returns:
+        np.ndarray: Denoised Sv array, dtype float32, same shape as input.
+    """
+    if not HAS_PYWT:
+        raise ImportError(
+            "PyWavelets is required for wavelet denoising. "
+            "Install with `python -m pip install pywavelets`."
+        )
+
+    sv_array = np.asarray(sv_data, dtype=np.float32)
+    if sv_array.ndim != 2:
+        raise ValueError(
+            f"Expected a 2D Sv array for wavelet denoising; got shape {sv_array.shape}."
+        )
+    if sv_array.size == 0:
+        return sv_array.copy()
+
+    finite_mask = np.isfinite(sv_array)
+    if not np.any(finite_mask):
+        return sv_array.copy()
+
+    finite_values = sv_array[finite_mask]
+    fill_value = float(np.median(finite_values))
+    prepared = np.where(finite_mask, sv_array, fill_value).astype(np.float32, copy=False)
+
+    mode_normalized = str(threshold_mode).strip().lower()
+    if mode_normalized not in {"soft", "hard"}:
+        print(
+            f"Warning: threshold_mode={threshold_mode!r} is invalid; "
+            "using 'soft'."
+        )
+        mode_normalized = "soft"
+
+    wavelet = pywt.Wavelet(wavelet_name)
+    min_dim = int(min(prepared.shape))
+    max_levels = pywt.dwt_max_level(min_dim, wavelet.dec_len)
+    if max_levels <= 0:
+        print("Warning: Sv array too small for wavelet decomposition; returning original Sv data.")
+        return prepared.astype(np.float32, copy=True)
+
+    level_int = int(levels) if levels is not None else 3
+    if level_int < 1:
+        level_int = 1
+    level_int = min(level_int, max_levels)
+
+    coeffs = pywt.wavedec2(prepared, wavelet=wavelet, level=level_int, mode="symmetric")
+    detail_coeffs_level1 = coeffs[-1][2]
+    sigma_est = float(np.median(np.abs(detail_coeffs_level1)) / 0.6745) if detail_coeffs_level1.size else 0.0
+    if not np.isfinite(sigma_est) or sigma_est <= 0.0:
+        return prepared.astype(np.float32, copy=True)
+
+    universal_threshold = sigma_est * np.sqrt(2.0 * np.log(prepared.size))
+    threshold_value = float(max(universal_threshold * float(threshold_scale), 0.0))
+
+    denoised_coeffs = [coeffs[0]]
+    for c_h, c_v, c_d in coeffs[1:]:
+        denoised_coeffs.append(
+            (
+                pywt.threshold(c_h, value=threshold_value, mode=mode_normalized),
+                pywt.threshold(c_v, value=threshold_value, mode=mode_normalized),
+                pywt.threshold(c_d, value=threshold_value, mode=mode_normalized),
+            )
+        )
+
+    denoised = pywt.waverec2(denoised_coeffs, wavelet=wavelet, mode="symmetric")
+    denoised = denoised[: prepared.shape[0], : prepared.shape[1]]
+    denoised = np.where(finite_mask, denoised, fill_value)
+
+    if clip_min is not None and clip_max is not None:
+        lower, upper = sorted((float(clip_min), float(clip_max)))
+        denoised = np.clip(denoised, lower, upper)
+    elif clip_min is not None:
+        denoised = np.maximum(denoised, float(clip_min))
+    elif clip_max is not None:
+        denoised = np.minimum(denoised, float(clip_max))
+
+    return denoised.astype(np.float32)
 
 # This function is no longer used - the main processing is now in echogram_processing.py
 

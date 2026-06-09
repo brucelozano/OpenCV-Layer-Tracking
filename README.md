@@ -36,6 +36,7 @@ Core dependencies:
 Optional dependency:
 
 - `scipy` (used for enhanced resampling helpers; pipeline still runs without it)
+- `pywavelets` (used for optional wavelet denoising before contour detection)
 
 Install from file:
 
@@ -46,7 +47,7 @@ python -m pip install -r requirements.txt
 Or install directly:
 
 ```bash
-python -m pip install numpy pandas matplotlib opencv-python scipy
+python -m pip install numpy pandas matplotlib opencv-python scipy pywavelets
 ```
 
 ## Workflow 1: Run One Dataset
@@ -82,6 +83,17 @@ Review/runtime toggles:
 - `ECHOGRAM_REVIEWED_CONTOURS_FILENAME`
 - `ECHOGRAM_REVIEWED_CONTOURS_SUBDIR`
 - `ECHOGRAM_REVIEWED_CONTOURS_DIR`
+
+Wavelet preprocessing toggles:
+
+- `ECHOGRAM_WAVELET_ENABLE`
+- `ECHOGRAM_WAVELET_NAME` (e.g., `db4`, `bior4.4`)
+- `ECHOGRAM_WAVELET_LEVELS`
+- `ECHOGRAM_WAVELET_THRESHOLD_MODE` (`soft`/`hard`)
+- `ECHOGRAM_WAVELET_THRESHOLD_SCALE`
+- `ECHOGRAM_WAVELET_CLIP_MIN`
+- `ECHOGRAM_WAVELET_CLIP_MAX`
+- `ECHOGRAM_WAVELET_APPLY_SECOND_PASS`
 
 ### Layer Review Features
 

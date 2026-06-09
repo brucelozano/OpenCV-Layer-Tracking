@@ -265,17 +265,7 @@ def _plot_direction_metric(
     ax.set_ylabel(ylabel)
     ax.grid(axis="y", alpha=0.25)
     ax.set_axisbelow(True)
-    ax.legend(frameon=False)
-    ax.text(
-        0.01,
-        0.98,
-        "Error bars = ±SEM",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=9,
-        bbox=dict(boxstyle="round,pad=0.25", facecolor="white", alpha=0.8, edgecolor="none"),
-    )
+    ax.legend(frameon=False, loc="upper left")
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")

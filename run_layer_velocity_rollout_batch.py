@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,22 @@ def load_input_csv_from_params(params_file: Path) -> Path:
     return Path(str(input_csv))
 
 
+def load_reviewed_contours_status(status_path: Path):
+    if not status_path.exists():
+        return None
+    try:
+        with status_path.open("r", encoding="utf-8") as status_file:
+            payload = json.load(status_file)
+    except Exception as exc:
+        print(f"  Warning: failed to read reviewed contour status file: {status_path} ({exc})")
+        return None
+
+    if not isinstance(payload, dict):
+        print(f"  Warning: reviewed contour status payload is not a JSON object: {status_path}")
+        return None
+    return payload
+
+
 def main() -> int:
     output_root = (OUTPUT_ROOT_DIR / EXPERIMENT_LABEL).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -34,6 +51,9 @@ def main() -> int:
 
     success = []
     failed = []
+    reviewed_loaded = []
+    reviewed_refused = []
+    reviewed_unknown = []
 
     batch_start = time.perf_counter()
     print(f"Running layer-velocity rollout for {len(TARGET_DATASETS)} datasets")
@@ -51,6 +71,7 @@ def main() -> int:
 
         if not params_file.exists():
             failed.append((dataset_name, "params file not found"))
+            reviewed_unknown.append((dataset_name, "not run (params file not found)"))
             print("  Result: FAILED (params file not found)")
             continue
 
@@ -58,11 +79,13 @@ def main() -> int:
             input_csv = load_input_csv_from_params(params_file)
         except Exception as exc:
             failed.append((dataset_name, f"failed to load params FILE_PATH: {exc}"))
+            reviewed_unknown.append((dataset_name, "not run (failed to load params FILE_PATH)"))
             print(f"  Result: FAILED ({exc})")
             continue
 
         if not input_csv.exists():
             failed.append((dataset_name, f"input CSV not found: {input_csv}"))
+            reviewed_unknown.append((dataset_name, "not run (input CSV missing)"))
             print(f"  Result: FAILED (input CSV missing: {input_csv})")
             continue
 
@@ -93,6 +116,38 @@ def main() -> int:
         result = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env)
         run_elapsed = time.perf_counter() - run_start
 
+        status_path = run_output_dir / "reviewed_contours_status.json"
+        reviewed_status = load_reviewed_contours_status(status_path)
+        if reviewed_status is None:
+            reviewed_unknown.append((dataset_name, f"status file missing: {status_path}"))
+            print(f"  Reviewed contours: UNKNOWN (status file missing: {status_path.name})")
+        else:
+            requested_load = bool(reviewed_status.get("requested_load", False))
+            loaded_from_artifact = bool(reviewed_status.get("loaded_from_artifact", False))
+            load_status = str(reviewed_status.get("load_status", "unknown"))
+            load_reason = str(reviewed_status.get("load_reason") or "").strip()
+            artifact_path = str(reviewed_status.get("artifact_path") or "")
+            metadata_mismatch_reasons = reviewed_status.get("metadata_mismatch_reasons") or []
+
+            if loaded_from_artifact:
+                reviewed_loaded.append(dataset_name)
+                print(f"  Reviewed contours: LOADED ({artifact_path})")
+            elif requested_load:
+                reason_parts = []
+                if load_reason:
+                    reason_parts.append(load_reason)
+                if metadata_mismatch_reasons:
+                    mismatch_text = ", ".join(str(reason) for reason in metadata_mismatch_reasons)
+                    reason_parts.append(f"metadata={mismatch_text}")
+                refusal_reason = "; ".join(reason_parts) if reason_parts else load_status
+                reviewed_refused.append((dataset_name, refusal_reason, artifact_path))
+                print(f"  Reviewed contours: REFUSED ({refusal_reason})")
+                if artifact_path:
+                    print(f"    Artifact path: {artifact_path}")
+            else:
+                reviewed_unknown.append((dataset_name, f"load not requested ({load_status})"))
+                print(f"  Reviewed contours: NOT REQUESTED ({load_status})")
+
         if result.returncode == 0:
             success.append(dataset_name)
             print(f"  Result: SUCCESS ({run_elapsed:.1f}s)")
@@ -105,6 +160,20 @@ def main() -> int:
     print(f"  Success: {len(success)}")
     print(f"  Failed: {len(failed)}")
     print(f"  Elapsed: {elapsed:.1f}s")
+
+    print("\nReviewed contour reuse summary")
+    print(f"  Loaded from artifact: {len(reviewed_loaded)}")
+    print(f"  Refused while requested: {len(reviewed_refused)}")
+    if reviewed_refused:
+        print("  Refused datasets:")
+        for dataset_name, reason, artifact_path in reviewed_refused:
+            artifact_suffix = f" [artifact: {artifact_path}]" if artifact_path else ""
+            print(f"  - {dataset_name}: {reason}{artifact_suffix}")
+
+    if reviewed_unknown:
+        print("  Unknown/not-run reviewed contour status:")
+        for dataset_name, reason in reviewed_unknown:
+            print(f"  - {dataset_name}: {reason}")
 
     if failed:
         print("\nFailed datasets:")

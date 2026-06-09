@@ -8,6 +8,7 @@ import cv2
 import importlib
 import re
 import json
+import shutil
 pyplot.rcParams['figure.dpi'] = 800
 pyplot.rcParams['savefig.dpi'] = 800
 
@@ -44,7 +45,42 @@ def get_env_bool(name, default_value):
     return bool(default_value)
 
 
+def get_env_int(name, default_value):
+    """
+    Parse integer environment override values.
+    """
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return int(default_value)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        print(
+            f"Environment override {name}={raw_value!r} is not a valid integer; "
+            f"using default {default_value}."
+        )
+        return int(default_value)
+
+
+def get_env_float(name, default_value):
+    """
+    Parse float environment override values.
+    """
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return float(default_value)
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        print(
+            f"Environment override {name}={raw_value!r} is not a valid float; "
+            f"using default {default_value}."
+        )
+        return float(default_value)
+
+
 VALID_TIME_AXIS_MODES = {"true_time", "linear"}
+VALID_WAVELET_THRESHOLD_MODES = {"soft", "hard"}
 
 
 def normalize_time_axis_mode(value, context_label="TIME_AXIS_MODE"):
@@ -64,6 +100,20 @@ def normalize_time_axis_mode(value, context_label="TIME_AXIS_MODE"):
         "Using 'true_time' (supported: 'true_time', 'linear')."
     )
     return "true_time"
+
+
+def normalize_wavelet_threshold_mode(value, context_label="WAVELET_THRESHOLD_MODE"):
+    """
+    Normalize wavelet coefficient threshold mode.
+    """
+    normalized = str(value).strip().lower() if value is not None else "soft"
+    if normalized in VALID_WAVELET_THRESHOLD_MODES:
+        return normalized
+    print(
+        f"Warning: {context_label}={value!r} is invalid. "
+        "Using 'soft' (supported: 'soft', 'hard')."
+    )
+    return "soft"
 
 
 FILE_PATH = getattr(params_module, "FILE_PATH")
@@ -116,6 +166,17 @@ DIFFUSE_DSL_MORPH_KERNEL_SIZE = getattr(params_module, "DIFFUSE_DSL_MORPH_KERNEL
 DIFFUSE_DSL_MORPH_CLOSE_ITERATIONS = getattr(params_module, "DIFFUSE_DSL_MORPH_CLOSE_ITERATIONS")
 DIFFUSE_DSL_MORPH_OPEN_ITERATIONS = getattr(params_module, "DIFFUSE_DSL_MORPH_OPEN_ITERATIONS")
 DIFFUSE_DSL_CONTOUR_EPSILON_FACTOR = getattr(params_module, "DIFFUSE_DSL_CONTOUR_EPSILON_FACTOR")
+ENABLE_WAVELET_PREPROCESS = getattr(params_module, "ENABLE_WAVELET_PREPROCESS", False)
+WAVELET_NAME = getattr(params_module, "WAVELET_NAME", "db4")
+WAVELET_LEVELS = int(getattr(params_module, "WAVELET_LEVELS", 3))
+WAVELET_THRESHOLD_MODE = normalize_wavelet_threshold_mode(
+    getattr(params_module, "WAVELET_THRESHOLD_MODE", "soft"),
+    context_label="WAVELET_THRESHOLD_MODE",
+)
+WAVELET_THRESHOLD_SCALE = float(getattr(params_module, "WAVELET_THRESHOLD_SCALE", 1.0))
+WAVELET_CLIP_MIN = float(getattr(params_module, "WAVELET_CLIP_MIN", -90.0))
+WAVELET_CLIP_MAX = float(getattr(params_module, "WAVELET_CLIP_MAX", -30.0))
+WAVELET_APPLY_TO_SECOND_PASS = getattr(params_module, "WAVELET_APPLY_TO_SECOND_PASS", False)
 
 # Allow runtime override so batch mode can apply any params module to any input file.
 FILE_PATH = os.getenv("ECHOGRAM_INPUT_FILE", FILE_PATH)
@@ -140,6 +201,23 @@ REVIEWED_CONTOURS_SUBDIR = os.getenv(
     REVIEWED_CONTOURS_SUBDIR if REVIEWED_CONTOURS_SUBDIR is not None else "",
 ).strip() or None
 REVIEWED_CONTOURS_DIR_OVERRIDE = os.getenv("ECHOGRAM_REVIEWED_CONTOURS_DIR")
+ENABLE_WAVELET_PREPROCESS = get_env_bool("ECHOGRAM_WAVELET_ENABLE", ENABLE_WAVELET_PREPROCESS)
+WAVELET_NAME = os.getenv("ECHOGRAM_WAVELET_NAME", WAVELET_NAME)
+WAVELET_LEVELS = get_env_int("ECHOGRAM_WAVELET_LEVELS", WAVELET_LEVELS)
+WAVELET_THRESHOLD_MODE = normalize_wavelet_threshold_mode(
+    os.getenv("ECHOGRAM_WAVELET_THRESHOLD_MODE", WAVELET_THRESHOLD_MODE),
+    context_label="ECHOGRAM_WAVELET_THRESHOLD_MODE",
+)
+WAVELET_THRESHOLD_SCALE = get_env_float(
+    "ECHOGRAM_WAVELET_THRESHOLD_SCALE",
+    WAVELET_THRESHOLD_SCALE,
+)
+WAVELET_CLIP_MIN = get_env_float("ECHOGRAM_WAVELET_CLIP_MIN", WAVELET_CLIP_MIN)
+WAVELET_CLIP_MAX = get_env_float("ECHOGRAM_WAVELET_CLIP_MAX", WAVELET_CLIP_MAX)
+WAVELET_APPLY_TO_SECOND_PASS = get_env_bool(
+    "ECHOGRAM_WAVELET_APPLY_SECOND_PASS",
+    WAVELET_APPLY_TO_SECOND_PASS,
+)
 
 # Extract dataset name from the parameter file being used
 import sys
@@ -185,7 +263,8 @@ DATASET_NAME = get_dataset_name()
 print(f"Using dataset: {DATASET_NAME}")
 from dsl_tracking import (preprocess_for_opencv, detect_dsl_contours, 
                       plot_echogram_with_dsl, export_dsl_layers_to_csv,
-                      export_dsl_layers_to_boolean_csv, save_debug_image, get_distinct_colors)
+                      export_dsl_layers_to_boolean_csv, save_debug_image, get_distinct_colors,
+                      wavelet_denoise_sv)
 from layer_review import review_contours_interactively
 
 
@@ -911,6 +990,50 @@ def save_layer_review_manifest(figures_dir, manifest_payload):
         json.dump(manifest_payload, manifest_file, indent=2)
     print(f"Saved layer review manifest to: {manifest_path}")
     return manifest_path
+
+
+def save_reviewed_contours_status(figures_dir, status_payload):
+    """
+    Persist reviewed-contour load status for downstream rollout summaries.
+    """
+    status_path = os.path.join(figures_dir, "reviewed_contours_status.json")
+    with open(status_path, "w", encoding="utf-8") as status_file:
+        json.dump(status_payload, status_file, indent=2)
+    print(f"Saved reviewed contour status to: {status_path}")
+    return status_path
+
+
+def copy_result_artifacts_to_output_folder(source_dir, output_dir, artifact_filenames):
+    """
+    Copy selected result artifacts into the dataset-level output folder.
+    """
+    copied_paths = []
+    if os.path.abspath(source_dir) == os.path.abspath(output_dir):
+        return copied_paths
+
+    os.makedirs(output_dir, exist_ok=True)
+    for artifact_name in artifact_filenames:
+        source_path = os.path.join(source_dir, artifact_name)
+        if not os.path.isfile(source_path):
+            continue
+
+        destination_path = os.path.join(output_dir, artifact_name)
+        try:
+            shutil.copy2(source_path, destination_path)
+        except OSError as exc:
+            print(
+                f"Warning: failed to copy artifact '{source_path}' to "
+                f"'{destination_path}': {exc}"
+            )
+            continue
+        copied_paths.append(destination_path)
+
+    if copied_paths:
+        print(
+            "Copied final artifacts into dataset output folder:\n  - "
+            + "\n  - ".join(copied_paths)
+        )
+    return copied_paths
 
 
 def summarize_review_result_for_manifest(review_result):
@@ -1816,22 +1939,12 @@ def save_layer_speed_figure(
     speed_ax.set_title(plot_title)
     time_window_lines = []
     for metric in valid_metrics:
-        contour_window_label = format_time_window_label(
+        layer_window_label = format_time_window_label(
             metric.get('contour_start_time_utc', metric.get('start_time_utc')),
             metric.get('contour_end_time_utc', metric.get('end_time_utc')),
         )
-        motion_window_label = format_time_window_label(
-            metric.get('motion_start_time_utc'),
-            metric.get('motion_end_time_utc'),
-        )
-        if contour_window_label and motion_window_label:
-            time_window_lines.append(
-                f"{metric['label']}: contour {contour_window_label}; motion {motion_window_label}"
-            )
-        elif contour_window_label:
-            time_window_lines.append(f"{metric['label']}: contour {contour_window_label}")
-        elif motion_window_label:
-            time_window_lines.append(f"{metric['label']}: motion {motion_window_label}")
+        if layer_window_label:
+            time_window_lines.append(f"{metric['label']}: {layer_window_label}")
 
     if time_window_lines:
         max_time_lines = 8
@@ -1842,7 +1955,7 @@ def save_layer_speed_figure(
 
         speed_ax.text(
             0.01, 0.98,
-            "Layer windows (UTC)\n" + "\n".join(displayed_time_lines),
+            "Layer start/end (UTC)\n" + "\n".join(displayed_time_lines),
             transform=speed_ax.transAxes,
             ha='left',
             va='top',
@@ -2021,6 +2134,14 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
         print(f"Primary x-axis mode: Time (UTC) [{TIME_AXIS_MODE}]")
     else:
         print("Primary x-axis mode: Ping index")
+    if ENABLE_WAVELET_PREPROCESS:
+        print(
+            "Wavelet preprocessing enabled: "
+            f"name={WAVELET_NAME}, levels={WAVELET_LEVELS}, "
+            f"mode={WAVELET_THRESHOLD_MODE}, scale={WAVELET_THRESHOLD_SCALE:.3f}, "
+            f"clip=[{WAVELET_CLIP_MIN:.1f}, {WAVELET_CLIP_MAX:.1f}], "
+            f"pass2={WAVELET_APPLY_TO_SECOND_PASS}"
+        )
     
     # Get depth parameters first
     print("\nGetting depth parameters...")
@@ -2050,15 +2171,34 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
     # Crop image data by depth for first pass DSL detection
     cropped_image_data_for_dsl = image_data_for_pings[depth_idx_start:depth_idx_end, :]
     
+    if ENABLE_WAVELET_PREPROCESS:
+        print("Applying wavelet denoising before Pass 1 detection...")
+        cropped_image_data_for_dsl = wavelet_denoise_sv(
+            cropped_image_data_for_dsl,
+            wavelet_name=WAVELET_NAME,
+            levels=WAVELET_LEVELS,
+            threshold_mode=WAVELET_THRESHOLD_MODE,
+            threshold_scale=WAVELET_THRESHOLD_SCALE,
+            clip_min=WAVELET_CLIP_MIN,
+            clip_max=WAVELET_CLIP_MAX,
+        )
+
     # Check if we're working with resampled data and enhance if needed
     is_resampled_data = "resampled" in DATASET_NAME.lower() or "7x7" in DATASET_NAME.lower() or "3x3" in DATASET_NAME.lower()
     if is_resampled_data:
         print("Detected resampled data - applying enhancement...")
         from dsl_tracking import enhance_resampled_data
+        sharpen_edges = not ENABLE_WAVELET_PREPROCESS
+        if ENABLE_WAVELET_PREPROCESS:
+            print(
+                "Wavelet preprocessing is enabled, so resampled-data sharpening is disabled "
+                "to avoid reintroducing high-frequency noise."
+            )
         cropped_image_data_for_dsl = enhance_resampled_data(
             cropped_image_data_for_dsl,
             DSL_SV_THRESHOLD_MIN,
-            DSL_SV_THRESHOLD_MAX
+            DSL_SV_THRESHOLD_MAX,
+            sharpen_edges=sharpen_edges,
         )
     
     # Create ping time mapping with millisecond precision.
@@ -2109,6 +2249,15 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
         configured_filename=REVIEWED_CONTOURS_FILENAME,
         directory_override=REVIEWED_CONTOURS_DIR_OVERRIDE,
     )
+    reviewed_contours_status = {
+        "dataset_name": DATASET_NAME,
+        "requested_load": bool(LOAD_REVIEWED_CONTOURS),
+        "loaded_from_artifact": False,
+        "load_status": "requested" if LOAD_REVIEWED_CONTOURS else "not_requested",
+        "load_reason": None,
+        "artifact_path": reviewed_contours_artifact_path,
+        "metadata_mismatch_reasons": [],
+    }
     
     # Plot echogram with ALL DVM contours, color-coded by type
     # 1. Plot Pass 1 (Main) layers with distinct colors
@@ -2184,6 +2333,18 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
         
         # Fill the dilated areas in the Sv data
         modified_sv_data[dilated_pass1_mask == 255] = MASK_FILL_VALUE
+
+        if ENABLE_WAVELET_PREPROCESS and WAVELET_APPLY_TO_SECOND_PASS:
+            print("Applying wavelet denoising before Pass 2 detection...")
+            modified_sv_data = wavelet_denoise_sv(
+                modified_sv_data,
+                wavelet_name=WAVELET_NAME,
+                levels=WAVELET_LEVELS,
+                threshold_mode=WAVELET_THRESHOLD_MODE,
+                threshold_scale=WAVELET_THRESHOLD_SCALE,
+                clip_min=WAVELET_CLIP_MIN,
+                clip_max=WAVELET_CLIP_MAX,
+            )
         
         # Create debug directory for Pass 2
         dsl_debug_dir_pass2 = os.path.join(FIGURES_DIR, "dsl_debug_pass2")
@@ -2301,16 +2462,37 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
                 if ENABLE_LAYER_REVIEW:
                     review_output_figures_dir = reviewed_contours_artifact_dir
                     os.makedirs(review_output_figures_dir, exist_ok=True)
+                reviewed_contours_status["loaded_from_artifact"] = True
+                reviewed_contours_status["load_status"] = "loaded"
+                reviewed_contours_status["load_reason"] = "loaded_valid_artifact"
                 print(
                     f"Loaded reviewed contours from artifact: {reviewed_contours_artifact_path}"
+                )
+                print(
+                    "Reviewed contour load status: LOADED "
+                    f"(dataset={DATASET_NAME}, artifact={reviewed_contours_artifact_path})"
                 )
                 if ENABLE_LAYER_REVIEW and SKIP_LAYER_REVIEW_IF_LOADED:
                     print("Skipping interactive review because loaded contours are being reused.")
             else:
+                reviewed_contours_status["load_status"] = "refused"
+                reviewed_contours_status["load_reason"] = "metadata_mismatch"
+                reviewed_contours_status["metadata_mismatch_reasons"] = list(metadata_reasons)
                 print(
                     "Reviewed contour artifact metadata mismatch; running normal detection/review "
                     f"instead ({', '.join(metadata_reasons)})."
                 )
+                print(
+                    "Reviewed contour load status: REFUSED "
+                    f"(dataset={DATASET_NAME}, reason=metadata_mismatch)"
+                )
+        else:
+            reviewed_contours_status["load_status"] = "refused"
+            reviewed_contours_status["load_reason"] = "artifact_missing_or_unreadable"
+            print(
+                "Reviewed contour load status: REFUSED "
+                f"(dataset={DATASET_NAME}, reason=artifact_missing_or_unreadable)"
+            )
 
     # 3. Optional interactive review (main/all), before final outputs.
     if ENABLE_LAYER_REVIEW and not (reviewed_contours_loaded and SKIP_LAYER_REVIEW_IF_LOADED):
@@ -2471,10 +2653,10 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
             "Skipping reviewed contour artifact save because no reviewed contours were applied."
         )
 
-    # Ensure reviewed overlay images exist even when contours were loaded and GUI review was skipped.
+    # Always refresh reviewed overlays after review/loaded contours are applied.
+    # This prevents stale first-pass overlays from being mistaken as reviewed output.
     if layer_review_applied:
-        reviewed_main_path = os.path.join(review_output_figures_dir, 'echogram_with_main_dsl.png')
-        if main_dsl_contours and not os.path.exists(reviewed_main_path):
+        if main_dsl_contours:
             reviewed_main_title = (
                 f'{DATASET_NAME} All Reviewed Layers ({min_ping}-{max_ping})'
                 if layer_review_scope == "all"
@@ -2501,12 +2683,10 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
             )
             print("Saved reviewed main DSL visualization")
 
-        reviewed_diffuse_path = os.path.join(review_output_figures_dir, 'echogram_with_diffuse_dsl.png')
         if (
             ENABLE_SECOND_PASS
             and diffuse_dsl_contours_original
             and modified_sv_data is not None
-            and not os.path.exists(reviewed_diffuse_path)
         ):
             plot_echogram_with_dsl(
                 image_data=modified_sv_data,
@@ -2811,6 +2991,33 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
         )
     elif not EXPORT_BOOLEAN_CSV:
         print("\nSkipping boolean CSV export (EXPORT_BOOLEAN_CSV=False).")
+
+    if not reviewed_contours_status.get("requested_load", False) and layer_review_applied:
+        reviewed_contours_status["load_reason"] = "manual_review_applied"
+
+    reviewed_contours_status["reviewed_contours_loaded"] = bool(reviewed_contours_loaded)
+    reviewed_contours_status["layer_review_applied"] = bool(layer_review_applied)
+    reviewed_contours_status["layer_review_scope"] = layer_review_scope
+    reviewed_contours_status["results_figures_dir"] = results_figures_dir
+    reviewed_contours_status_path = save_reviewed_contours_status(
+        FIGURES_DIR,
+        reviewed_contours_status,
+    )
+
+    copied_artifacts_to_output = copy_result_artifacts_to_output_folder(
+        source_dir=results_figures_dir,
+        output_dir=FIGURES_DIR,
+        artifact_filenames=[
+            "echogram_with_main_dsl.png",
+            "echogram_with_diffuse_dsl.png",
+            "echogram_with_all_dsl.png",
+            "echogram_and_layer_speed.png",
+            "echogram_and_main_layer_speed.png",
+            "echogram_and_diffuse_layer_speed.png",
+            "dsl_layer_speed_vertical_summary.csv",
+            "dsl_layer_speed_method_comparison.csv",
+        ],
+    )
     
     return {
         'ping_time_map': ping_time_map,
@@ -2827,6 +3034,9 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
         'results_figures_dir': results_figures_dir,
         'layer_review_manifest': review_manifest,
         'reviewed_contours_loaded': reviewed_contours_loaded,
+        'reviewed_contours_status': reviewed_contours_status,
+        'reviewed_contours_status_path': reviewed_contours_status_path,
+        'copied_artifacts_to_output': copied_artifacts_to_output,
         'reviewed_contours_artifact_path': (
             reviewed_contours_artifact_saved_path
             if reviewed_contours_artifact_saved_path is not None

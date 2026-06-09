@@ -99,7 +99,7 @@ TARGET_DATASETS = [
         ),
     },
     {
-        "dataset_name": "B175N_CTD246_18kHz",
+        "dataset_name": "B175N_CTD246",
         "cruise_name": "DP09",
         "params_file": str(DP09_PARAMS_DIR / "params_B175N_CTD246_18kHz.py"),
         "reviewed_contours_dir": str(
@@ -107,7 +107,7 @@ TARGET_DATASETS = [
         ),
     },
     {
-        "dataset_name": "B082D_CTD255_18kHz",
+        "dataset_name": "B082D_CTD255",
         "cruise_name": "DP09",
         "params_file": str(DP09_PARAMS_DIR / "params_B082D_CTD255_18kHz.py"),
         "reviewed_contours_dir": str(

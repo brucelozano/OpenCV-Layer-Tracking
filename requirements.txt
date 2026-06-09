@@ -8,3 +8,6 @@ opencv-python
 
 # Optional but recommended (enhanced resampling helpers in dsl_tracking.py)
 scipy
+
+# Optional but recommended (wavelet preprocessing for contour denoising)
+pywavelets
