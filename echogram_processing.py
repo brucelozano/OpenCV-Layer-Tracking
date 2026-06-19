@@ -1826,6 +1826,73 @@ def add_expected_direction_speed_fields(layer_metrics, direction_multiplier):
     layer_metrics['primary_opposes_expected_direction'] = bool(primary_flag)
 
 
+def _metric_start_sort_key(metric):
+    """
+    Build a stable sort key for ordering layers by earliest contour start time.
+    """
+    for time_key in ['contour_start_time_utc', 'start_time_utc', 'motion_start_time_utc']:
+        raw_value = metric.get(time_key)
+        if raw_value is None or raw_value == "":
+            continue
+        parsed_ts = pd.to_datetime(raw_value, errors='coerce', utc=True)
+        if pd.notna(parsed_ts):
+            return 0, int(parsed_ts.value)
+    return 1, 0
+
+
+def build_time_ranked_main_layer_outputs(main_layer_metrics, main_contours):
+    """
+    Return (time-ranked metrics, time-ranked contours, colors) for main layers.
+    """
+    if not main_layer_metrics or not main_contours:
+        return [], [], []
+
+    sortable_entries = []
+    for fallback_index, metric in enumerate(main_layer_metrics):
+        contour_index_raw = metric.get('_contour_index', fallback_index)
+        try:
+            contour_index = int(contour_index_raw)
+        except (TypeError, ValueError):
+            contour_index = fallback_index
+        sortable_entries.append(
+            {
+                'metric': dict(metric),
+                'contour_index': contour_index,
+                'fallback_index': fallback_index,
+                'sort_key': _metric_start_sort_key(metric),
+            }
+        )
+
+    sortable_entries.sort(
+        key=lambda entry: (
+            entry['sort_key'][0],
+            entry['sort_key'][1],
+            entry['fallback_index'],
+        )
+    )
+
+    ranked_metrics = []
+    ranked_contours = []
+    ranked_colors = []
+    for entry in sortable_entries:
+        contour_index = entry['contour_index']
+        if contour_index < 0 or contour_index >= len(main_contours):
+            continue
+        ranked_metrics.append(entry['metric'])
+        ranked_contours.append(main_contours[contour_index])
+
+    if not ranked_metrics or not ranked_contours:
+        return [], [], []
+
+    ranked_colors = get_distinct_colors(len(ranked_metrics))
+    for rank, (metric, color) in enumerate(zip(ranked_metrics, ranked_colors), start=1):
+        metric['label'] = f'Main Layer {rank}'
+        metric['color'] = color
+        metric.pop('_contour_index', None)
+
+    return ranked_metrics, ranked_contours, ranked_colors
+
+
 def save_layer_speed_figure(
     echogram_image_path,
     layer_metrics,
@@ -2849,6 +2916,8 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
                 layer_metrics['label'] = f'{label_prefix} Layer {idx}'
                 layer_metrics['layer_type'] = label_prefix.lower()
                 layer_metrics['color'] = color
+                if layer_metrics['layer_type'] == 'main':
+                    layer_metrics['_contour_index'] = idx - 1
                 layer_metrics['cast_direction'] = expected_direction
                 add_expected_direction_speed_fields(
                     layer_metrics=layer_metrics,
@@ -2857,7 +2926,15 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
                 layer_speed_metrics.append(layer_metrics)
 
         if layer_speed_metrics:
-            layer_metrics_df = pd.DataFrame(layer_speed_metrics)
+            exportable_layer_metrics = [
+                {
+                    key: value
+                    for key, value in metric.items()
+                    if not str(key).startswith('_')
+                }
+                for metric in layer_speed_metrics
+            ]
+            layer_metrics_df = pd.DataFrame(exportable_layer_metrics)
             layer_metrics_csv = os.path.join(results_figures_dir, 'dsl_layer_speed_vertical_summary.csv')
             layer_metrics_df.to_csv(layer_metrics_csv, index=False)
             print(f"Saved layer speed/vertical summary to: {layer_metrics_csv}")
@@ -2904,7 +2981,7 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
             )
 
             main_layer_metrics = [
-                metric for metric in layer_speed_metrics
+                dict(metric) for metric in layer_speed_metrics
                 if metric['layer_type'] == 'main'
             ]
             if main_layer_metrics:
@@ -2918,6 +2995,48 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
                     expected_direction=expected_direction,
                     plot_title=f'Main Layers: {direction_name} Trend Speed (m/min)',
                 )
+
+                ranked_main_metrics, ranked_main_contours, ranked_main_colors = (
+                    build_time_ranked_main_layer_outputs(main_layer_metrics, main_dsl_contours)
+                )
+                if ranked_main_metrics and ranked_main_contours:
+                    ranked_main_overlay_filename = 'echogram_with_main_dsl_time_ranked.png'
+                    plot_echogram_with_dsl(
+                        image_data=cropped_image_data_for_dsl,
+                        depth_start=depth_start,
+                        depth_stop=depth_stop,
+                        min_ping=min_ping,
+                        max_ping=max_ping,
+                        contours=ranked_main_contours,
+                        vmin=DVM_VMIN,
+                        vmax=DVM_VMAX,
+                        title=f'{DATASET_NAME} Main DVM Layers ({min_ping}-{max_ping}) [Time-Ranked]',
+                        save_path=ranked_main_overlay_filename,
+                        figures_dir=results_figures_dir,
+                        show_outline=show_outline,
+                        contour_info=[(ranked_main_contours, ranked_main_colors, 'Main')],
+                        x_axis_values=main_plot_x_values,
+                        x_axis_is_time=USE_TIME_X_AXIS,
+                        x_axis_label='Time (UTC)' if USE_TIME_X_AXIS else 'Ping Number',
+                        x_axis_mode=TIME_AXIS_MODE,
+                    )
+                    print("Saved time-ranked main DSL visualization")
+
+                    ranked_main_speed_figure_path = os.path.join(
+                        results_figures_dir,
+                        'echogram_and_main_layer_speed_time_ranked.png',
+                    )
+                    save_layer_speed_figure(
+                        echogram_image_path=os.path.join(
+                            results_figures_dir,
+                            ranked_main_overlay_filename,
+                        ),
+                        layer_metrics=ranked_main_metrics,
+                        output_path=ranked_main_speed_figure_path,
+                        dataset_name=DATASET_NAME,
+                        expected_direction=expected_direction,
+                        plot_title=f'Main Layers (time-ranked): {direction_name} Trend Speed (m/min)',
+                    )
 
             diffuse_layer_metrics = [
                 metric for metric in layer_speed_metrics
@@ -3009,10 +3128,12 @@ def process_echogram_with_dsl_detection(start_ping=None, end_ping=None, show_out
         output_dir=FIGURES_DIR,
         artifact_filenames=[
             "echogram_with_main_dsl.png",
+            "echogram_with_main_dsl_time_ranked.png",
             "echogram_with_diffuse_dsl.png",
             "echogram_with_all_dsl.png",
             "echogram_and_layer_speed.png",
             "echogram_and_main_layer_speed.png",
+            "echogram_and_main_layer_speed_time_ranked.png",
             "echogram_and_diffuse_layer_speed.png",
             "dsl_layer_speed_vertical_summary.csv",
             "dsl_layer_speed_method_comparison.csv",

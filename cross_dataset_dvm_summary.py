@@ -31,6 +31,28 @@ DIRECTION_COLORS = {
     "unknown": "#7f7f7f",
 }
 
+METRIC_SPECS = [
+    ("primary_speed_m_per_min_display", "Primary migration speed by layer rank", "Speed (m/min)"),
+    ("speed_m_per_min_display", "Endpoint speed by layer rank", "Speed (m/min)"),
+    ("speed_m_per_min_regression_display", "Regression trend speed by layer rank", "Speed (m/min)"),
+    ("speed_m_per_min_windowed_display", "Windowed speed by layer rank", "Speed (m/min)"),
+    ("distance_abs_m", "Distance migrated by layer rank", "Distance migrated (m)"),
+    ("contour_duration_min", "Contour-span duration by layer rank", "Duration (min)"),
+    ("motion_duration_min", "Motion-onset duration by layer rank", "Duration (min)"),
+    ("motion_start_clock_hr", "Motion start time by layer rank", "UTC clock time (hours)"),
+    ("motion_end_clock_hr", "Motion end time by layer rank", "UTC clock time (hours)"),
+]
+
+SITE_LAYER_MAX_RANK = 3
+SITE_LAYER_DIRECTION_ORDER = [
+    ("upward", 1, "Up L1"),
+    ("upward", 2, "Up L2"),
+    ("upward", 3, "Up L3"),
+    ("downward", 1, "Down L1"),
+    ("downward", 2, "Down L2"),
+    ("downward", 3, "Down L3"),
+]
+
 
 def _apply_plot_style() -> None:
     plt.rcParams.update(
@@ -68,6 +90,46 @@ def _infer_direction(dataset_name: str) -> str:
             return "downward"
         if token.endswith("N") and any(ch.isdigit() for ch in token):
             return "upward"
+    return "unknown"
+
+
+def _infer_frequency_label(dataset_spec: dict) -> str:
+    for candidate in [
+        str(dataset_spec.get("dataset_name", "")),
+        str(dataset_spec.get("params_file", "")),
+        str(dataset_spec.get("reviewed_contours_dir", "")),
+    ]:
+        match = re.search(r"(18|38)\s*k?hz", candidate, re.IGNORECASE)
+        if match:
+            return f"{match.group(1)}kHz"
+    return "unknown"
+
+
+def _infer_site_label(dataset_name: str) -> str:
+    upper_name = str(dataset_name).upper()
+    cast_match = re.search(r"\b(B\d+)[DN]\b", upper_name)
+    if cast_match:
+        return cast_match.group(1)
+
+    for token in upper_name.split("_"):
+        if len(token) >= 2 and token.endswith(("D", "N")) and any(ch.isdigit() for ch in token):
+            return token[:-1]
+    return str(dataset_name)
+
+
+def _infer_day_night_code(dataset_name: str) -> str:
+    """
+    Extract cast code suffix such as D/N/D1/N2 from dataset identifiers.
+    """
+    upper_name = str(dataset_name).upper()
+    cast_match = re.search(r"\bB\d+([DN]\d*)\b", upper_name)
+    if cast_match:
+        return cast_match.group(1)
+
+    for token in upper_name.split("_"):
+        token_match = re.match(r"B\d+([DN]\d*)$", token)
+        if token_match:
+            return token_match.group(1)
     return "unknown"
 
 
@@ -291,7 +353,11 @@ def _build_speed_method_long_records(records_df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)
 
 
-def _plot_speed_method_comparison(speed_long_df: pd.DataFrame, output_path: Path) -> None:
+def _plot_speed_method_comparison(
+    speed_long_df: pd.DataFrame,
+    output_path: Path,
+    plot_title: str = "Speed metric comparison by layer rank",
+) -> None:
     if speed_long_df.empty:
         print("Skipping method comparison plot (no speed records).")
         return
@@ -355,82 +421,276 @@ def _plot_speed_method_comparison(speed_long_df: pd.DataFrame, output_path: Path
 
     axes[0].set_ylabel("Speed (m/min)")
     axes[0].legend(frameon=False, fontsize=9)
-    fig.suptitle("Speed metric comparison by layer rank")
+    fig.suptitle(plot_title)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {output_path}")
 
 
-def main() -> int:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def _title_with_suffix(base_title: str, title_suffix: str | None) -> str:
+    if title_suffix is None:
+        return base_title
+    suffix_text = str(title_suffix).strip()
+    if not suffix_text:
+        return base_title
+    return f"{base_title} ({suffix_text})"
 
-    records = []
-    dataset_status = []
-    for dataset_spec in TARGET_DATASETS:
-        dataset_name = str(dataset_spec["dataset_name"])
-        cruise_name = str(dataset_spec["cruise_name"])
-        csv_path = INPUT_ROOT / cruise_name / dataset_name / CSV_FILENAME
-        dataset_status.append(
-            {
-                "dataset": dataset_name,
-                "cruise": cruise_name,
-                "csv_path": str(csv_path),
-                "csv_exists": csv_path.exists(),
-            }
+
+def _site_layer_speed_column(direction: str, layer_rank: int) -> str:
+    return f"{direction}_layer_{int(layer_rank)}_speed_m_per_min"
+
+
+def _build_site_direction_layer_speed_table(
+    records_df: pd.DataFrame,
+    speed_col: str = "primary_speed_m_per_min_display",
+) -> pd.DataFrame:
+    if speed_col not in records_df.columns:
+        return pd.DataFrame()
+
+    required_columns = {"dataset", "cruise", "direction", "layer_rank"}
+    if not required_columns.issubset(records_df.columns):
+        return pd.DataFrame()
+
+    table_df = records_df.copy()
+    if "frequency_khz" not in table_df.columns:
+        table_df["frequency_khz"] = "unknown"
+
+    table_df[speed_col] = pd.to_numeric(table_df[speed_col], errors="coerce")
+    table_df["layer_rank"] = pd.to_numeric(table_df["layer_rank"], errors="coerce")
+    table_df = table_df[
+        np.isfinite(table_df[speed_col])
+        & table_df["direction"].isin({"upward", "downward"})
+        & table_df["layer_rank"].between(1, SITE_LAYER_MAX_RANK)
+    ].copy()
+    if table_df.empty:
+        return pd.DataFrame()
+
+    table_df["layer_rank"] = table_df["layer_rank"].astype(int)
+    table_df["site"] = table_df["dataset"].map(_infer_site_label)
+    table_df["speed_col_name"] = table_df.apply(
+        lambda row: _site_layer_speed_column(row["direction"], row["layer_rank"]),
+        axis=1,
+    )
+
+    pivot_df = (
+        table_df.pivot_table(
+            index=["frequency_khz", "cruise", "site"],
+            columns="speed_col_name",
+            values=speed_col,
+            aggfunc="mean",
         )
-        dataset_df = _load_dataset_main_layers(dataset_spec)
-        if dataset_df.empty:
-            continue
-        records.append(dataset_df)
-
-    status_df = pd.DataFrame(dataset_status)
-    status_df.to_csv(OUTPUT_DIR / "dataset_input_status.csv", index=False)
-    print(f"Saved: {OUTPUT_DIR / 'dataset_input_status.csv'}")
-
-    if not records:
-        print("No dataset records available to summarize.")
-        return 1
-
-    combined_df = pd.concat(records, ignore_index=True)
-    combined_df.to_csv(OUTPUT_DIR / "combined_main_layer_records.csv", index=False)
-    print(f"Saved: {OUTPUT_DIR / 'combined_main_layer_records.csv'}")
-
-    metric_specs = [
-        ("primary_speed_m_per_min_display", "Primary migration speed by layer rank", "Speed (m/min)"),
-        ("speed_m_per_min_display", "Endpoint speed by layer rank", "Speed (m/min)"),
-        ("speed_m_per_min_regression_display", "Regression trend speed by layer rank", "Speed (m/min)"),
-        ("speed_m_per_min_windowed_display", "Windowed speed by layer rank", "Speed (m/min)"),
-        ("distance_abs_m", "Distance migrated by layer rank", "Distance migrated (m)"),
-        ("contour_duration_min", "Contour-span duration by layer rank", "Duration (min)"),
-        ("motion_duration_min", "Motion-onset duration by layer rank", "Duration (min)"),
-        ("motion_start_clock_hr", "Motion start time by layer rank", "UTC clock time (hours)"),
-        ("motion_end_clock_hr", "Motion end time by layer rank", "UTC clock time (hours)"),
+        .reset_index()
+    )
+    expected_speed_columns = [
+        _site_layer_speed_column(direction, rank)
+        for direction, rank, _ in SITE_LAYER_DIRECTION_ORDER
     ]
+    for column in expected_speed_columns:
+        if column not in pivot_df.columns:
+            pivot_df[column] = np.nan
+
+    dataset_name_map = (
+        table_df.groupby(["frequency_khz", "cruise", "site", "direction"], as_index=False)
+        .agg(dataset_names=("dataset", lambda values: "; ".join(sorted(set(map(str, values))))))
+    )
+    upward_names = (
+        dataset_name_map[dataset_name_map["direction"] == "upward"]
+        .rename(columns={"dataset_names": "upward_datasets"})
+        .drop(columns=["direction"])
+    )
+    downward_names = (
+        dataset_name_map[dataset_name_map["direction"] == "downward"]
+        .rename(columns={"dataset_names": "downward_datasets"})
+        .drop(columns=["direction"])
+    )
+
+    pivot_df = pivot_df.merge(
+        upward_names,
+        on=["frequency_khz", "cruise", "site"],
+        how="left",
+    ).merge(
+        downward_names,
+        on=["frequency_khz", "cruise", "site"],
+        how="left",
+    )
+
+    ordered_columns = [
+        "frequency_khz",
+        "cruise",
+        "site",
+        "upward_datasets",
+        "downward_datasets",
+    ] + expected_speed_columns
+    pivot_df = pivot_df[ordered_columns].sort_values(["frequency_khz", "cruise", "site"])
+    return pivot_df
+
+
+def _build_site_movement_layer_speed_table(
+    records_df: pd.DataFrame,
+    speed_col: str = "primary_speed_m_per_min_display",
+) -> pd.DataFrame:
+    """
+    Build one-row-per-direction table with layer speed columns.
+    """
+    if speed_col not in records_df.columns:
+        return pd.DataFrame()
+
+    required_columns = {"dataset", "cruise", "direction", "layer_rank"}
+    if not required_columns.issubset(records_df.columns):
+        return pd.DataFrame()
+
+    table_df = records_df.copy()
+    if "frequency_khz" not in table_df.columns:
+        table_df["frequency_khz"] = "unknown"
+
+    table_df[speed_col] = pd.to_numeric(table_df[speed_col], errors="coerce")
+    table_df["layer_rank"] = pd.to_numeric(table_df["layer_rank"], errors="coerce")
+    table_df = table_df[
+        np.isfinite(table_df[speed_col])
+        & table_df["direction"].isin({"upward", "downward"})
+        & table_df["layer_rank"].between(1, SITE_LAYER_MAX_RANK)
+    ].copy()
+    if table_df.empty:
+        return pd.DataFrame()
+
+    table_df["layer_rank"] = table_df["layer_rank"].astype(int)
+    table_df["site"] = table_df["dataset"].map(_infer_site_label)
+    table_df["day_night_code"] = table_df["dataset"].map(_infer_day_night_code)
+
+    group_keys = ["frequency_khz", "cruise", "site", "day_night_code", "direction"]
+    layer_pivot_df = (
+        table_df.pivot_table(
+            index=group_keys,
+            columns="layer_rank",
+            values=speed_col,
+            aggfunc="mean",
+        )
+        .reset_index()
+    )
+    for layer_rank in range(1, SITE_LAYER_MAX_RANK + 1):
+        if layer_rank not in layer_pivot_df.columns:
+            layer_pivot_df[layer_rank] = np.nan
+
+    layer_pivot_df = layer_pivot_df.rename(
+        columns={
+            rank: f"layer_{rank}_speed_m_per_min"
+            for rank in range(1, SITE_LAYER_MAX_RANK + 1)
+        }
+    )
+
+    dataset_name_df = (
+        table_df.groupby(group_keys, as_index=False)
+        .agg(dataset_names=("dataset", lambda values: "; ".join(sorted(set(map(str, values))))))
+    )
+    merged_df = layer_pivot_df.merge(dataset_name_df, on=group_keys, how="left")
+    ordered_columns = group_keys + [
+        "dataset_names",
+        "layer_1_speed_m_per_min",
+        "layer_2_speed_m_per_min",
+        "layer_3_speed_m_per_min",
+    ]
+    merged_df = merged_df[ordered_columns].sort_values(
+        ["frequency_khz", "cruise", "site", "day_night_code", "direction"]
+    )
+    return merged_df
+
+
+def _plot_site_direction_layer_speed_table(
+    speed_table_df: pd.DataFrame,
+    output_path: Path,
+    title: str,
+) -> None:
+    if speed_table_df.empty:
+        print(f"Skipping site direction/layer speed table figure (no records): {output_path}")
+        return
+
+    value_columns = [
+        _site_layer_speed_column(direction, rank)
+        for direction, rank, _ in SITE_LAYER_DIRECTION_ORDER
+    ]
+    matrix = speed_table_df[value_columns].to_numpy(dtype=float)
+    if matrix.size == 0:
+        print(f"Skipping site direction/layer speed table figure (empty matrix): {output_path}")
+        return
+
+    if speed_table_df["frequency_khz"].nunique() > 1:
+        row_labels = [
+            f"{row.frequency_khz} | {row.cruise} | {row.site}"
+            for row in speed_table_df.itertuples(index=False)
+        ]
+    else:
+        row_labels = [f"{row.cruise} | {row.site}" for row in speed_table_df.itertuples(index=False)]
+
+    column_labels = [label for _, _, label in SITE_LAYER_DIRECTION_ORDER]
+    masked = np.ma.masked_invalid(matrix)
+
+    _apply_plot_style()
+    fig_height = max(4.0, 1.6 + (0.42 * len(row_labels)))
+    fig, ax = plt.subplots(figsize=(10.5, fig_height))
+    colormap = plt.cm.viridis.copy()
+    colormap.set_bad(color="#f0f0f0")
+    heatmap = ax.imshow(masked, aspect="auto", cmap=colormap)
+
+    ax.set_xticks(np.arange(len(column_labels)))
+    ax.set_xticklabels(column_labels)
+    ax.set_yticks(np.arange(len(row_labels)))
+    ax.set_yticklabels(row_labels)
+    ax.set_xlabel("Direction and layer rank")
+    ax.set_ylabel("Site")
+    ax.set_title(title)
+
+    max_value = float(np.nanmax(matrix)) if np.isfinite(matrix).any() else 0.0
+    text_threshold = max_value * 0.55 if max_value > 0 else 0.0
+    for row_idx in range(matrix.shape[0]):
+        for col_idx in range(matrix.shape[1]):
+            value = matrix[row_idx, col_idx]
+            if not np.isfinite(value):
+                ax.text(col_idx, row_idx, "-", ha="center", va="center", fontsize=8, color="#6e6e6e")
+                continue
+            text_color = "white" if value >= text_threshold and max_value > 0 else "black"
+            ax.text(col_idx, row_idx, f"{value:.2f}", ha="center", va="center", fontsize=8, color=text_color)
+
+    cbar = fig.colorbar(heatmap, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label("Primary speed (m/min)")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
+
+def _write_summary_outputs(
+    records_df: pd.DataFrame,
+    output_dir: Path,
+    title_suffix: str | None = None,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    records_df.to_csv(output_dir / "combined_main_layer_records.csv", index=False)
+    print(f"Saved: {output_dir / 'combined_main_layer_records.csv'}")
 
     metric_aggregate_frames = []
-    for metric_col, title, ylabel in metric_specs:
-        agg_df = _aggregate_metric(combined_df, metric_col)
+    for metric_col, title, ylabel in METRIC_SPECS:
+        agg_df = _aggregate_metric(records_df, metric_col)
         if agg_df.empty:
             continue
         agg_df["metric"] = metric_col
         metric_aggregate_frames.append(agg_df)
-        agg_df.to_csv(OUTPUT_DIR / f"{metric_col}_by_direction_layer.csv", index=False)
+        agg_df.to_csv(output_dir / f"{metric_col}_by_direction_layer.csv", index=False)
         _plot_direction_metric(
             agg_df=agg_df,
-            title=title,
+            title=_title_with_suffix(title, title_suffix),
             ylabel=ylabel,
-            output_path=OUTPUT_DIR / f"{metric_col}_by_direction_layer.png",
+            output_path=output_dir / f"{metric_col}_by_direction_layer.png",
         )
 
     if metric_aggregate_frames:
         all_metrics_df = pd.concat(metric_aggregate_frames, ignore_index=True)
-        all_metrics_df.to_csv(OUTPUT_DIR / "all_metric_aggregates.csv", index=False)
-        print(f"Saved: {OUTPUT_DIR / 'all_metric_aggregates.csv'}")
+        all_metrics_df.to_csv(output_dir / "all_metric_aggregates.csv", index=False)
+        print(f"Saved: {output_dir / 'all_metric_aggregates.csv'}")
 
-    speed_long_df = _build_speed_method_long_records(combined_df)
+    speed_long_df = _build_speed_method_long_records(records_df)
     if not speed_long_df.empty:
-        speed_long_df.to_csv(OUTPUT_DIR / "speed_method_long_records.csv", index=False)
+        speed_long_df.to_csv(output_dir / "speed_method_long_records.csv", index=False)
         speed_method_summary = (
             speed_long_df.groupby(["direction", "layer_rank", "method"], as_index=False)
             .agg(
@@ -443,11 +703,101 @@ def main() -> int:
         speed_method_summary["sem_speed"] = (
             speed_method_summary["std_speed"] / np.sqrt(speed_method_summary["dataset_count"])
         ).fillna(0.0)
-        speed_method_summary.to_csv(OUTPUT_DIR / "speed_method_summary.csv", index=False)
-        print(f"Saved: {OUTPUT_DIR / 'speed_method_summary.csv'}")
+        speed_method_summary.to_csv(output_dir / "speed_method_summary.csv", index=False)
+        print(f"Saved: {output_dir / 'speed_method_summary.csv'}")
         _plot_speed_method_comparison(
             speed_long_df=speed_long_df,
-            output_path=OUTPUT_DIR / "speed_method_comparison_by_direction.png",
+            output_path=output_dir / "speed_method_comparison_by_direction.png",
+            plot_title=_title_with_suffix("Speed metric comparison by layer rank", title_suffix),
+        )
+
+    site_speed_table = _build_site_direction_layer_speed_table(records_df)
+    if not site_speed_table.empty:
+        site_speed_table.to_csv(
+            output_dir / "site_direction_layer_speed_table.csv",
+            index=False,
+            na_rep="NaN",
+        )
+        print(f"Saved: {output_dir / 'site_direction_layer_speed_table.csv'}")
+        _plot_site_direction_layer_speed_table(
+            speed_table_df=site_speed_table,
+            output_path=output_dir / "site_direction_layer_speed_table.png",
+            title=_title_with_suffix(
+                "Site-level upward/downward speed by layer rank",
+                title_suffix,
+            ),
+        )
+
+    movement_speed_table = _build_site_movement_layer_speed_table(records_df)
+    if not movement_speed_table.empty:
+        movement_speed_table.to_csv(
+            output_dir / "site_movement_layer_speed_table.csv",
+            index=False,
+            na_rep="NaN",
+        )
+        print(f"Saved: {output_dir / 'site_movement_layer_speed_table.csv'}")
+
+
+def main() -> int:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    records = []
+    dataset_status = []
+    for dataset_spec in TARGET_DATASETS:
+        dataset_name = str(dataset_spec["dataset_name"])
+        cruise_name = str(dataset_spec["cruise_name"])
+        params_file = str(dataset_spec.get("params_file", ""))
+        frequency_khz = _infer_frequency_label(dataset_spec)
+        csv_path = INPUT_ROOT / cruise_name / dataset_name / CSV_FILENAME
+        dataset_status.append(
+            {
+                "dataset": dataset_name,
+                "cruise": cruise_name,
+                "params_file": params_file,
+                "frequency_khz": frequency_khz,
+                "csv_path": str(csv_path),
+                "csv_exists": csv_path.exists(),
+            }
+        )
+        dataset_df = _load_dataset_main_layers(dataset_spec)
+        if dataset_df.empty:
+            continue
+        dataset_df["frequency_khz"] = frequency_khz
+        records.append(dataset_df)
+
+    status_df = pd.DataFrame(dataset_status)
+    status_df.to_csv(OUTPUT_DIR / "dataset_input_status.csv", index=False)
+    print(f"Saved: {OUTPUT_DIR / 'dataset_input_status.csv'}")
+    frequency_counts_df = (
+        status_df.groupby("frequency_khz", as_index=False)
+        .agg(
+            configured_dataset_count=("dataset", "count"),
+            csv_found_count=("csv_exists", "sum"),
+        )
+        .sort_values("frequency_khz")
+    )
+    frequency_counts_df.to_csv(OUTPUT_DIR / "frequency_dataset_counts.csv", index=False)
+    print(f"Saved: {OUTPUT_DIR / 'frequency_dataset_counts.csv'}")
+
+    if not records:
+        print("No dataset records available to summarize.")
+        return 1
+
+    combined_df = pd.concat(records, ignore_index=True)
+    _write_summary_outputs(combined_df, OUTPUT_DIR)
+
+    frequency_root = OUTPUT_DIR / "by_frequency"
+    frequency_root.mkdir(parents=True, exist_ok=True)
+    for frequency_khz in ["18kHz", "38kHz", "unknown"]:
+        frequency_df = combined_df[combined_df["frequency_khz"] == frequency_khz].copy()
+        if frequency_df.empty:
+            print(f"Skipping {frequency_khz} frequency summary (no records).")
+            continue
+        frequency_output_dir = frequency_root / frequency_khz
+        _write_summary_outputs(
+            records_df=frequency_df,
+            output_dir=frequency_output_dir,
+            title_suffix=frequency_khz,
         )
 
     return 0
