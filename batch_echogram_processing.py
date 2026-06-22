@@ -163,7 +163,8 @@ def main() -> int:
         env["ECHOGRAM_INPUT_FILE"] = str(csv_file)
         env["ECHOGRAM_DATASET_NAME"] = dataset_name
         env["ECHOGRAM_CRUISE_NAME"] = cruise_name
-        env["ECHOGRAM_FIGURES_DIR"] = str(run_output_dir)
+        env["ECHOGRAM_GROUP_OUTPUTS_BY_CRUISE"] = "1" if GROUP_OUTPUTS_BY_CRUISE else "0"
+        env["ECHOGRAM_FIGURES_DIR"] = str(output_root)
 
         cmd = [sys.executable, str(project_root / "echogram_processing.py")]
         if VERBOSE_BATCH_DEBUG:
@@ -175,6 +176,7 @@ def main() -> int:
                 print(f"  Env[ECHOGRAM_PARAMS_FILE]={env['ECHOGRAM_PARAMS_FILE']}")
             else:
                 print(f"  Env[ECHOGRAM_PARAMS_MODULE]={env['ECHOGRAM_PARAMS_MODULE']}")
+            print(f"  Env[ECHOGRAM_GROUP_OUTPUTS_BY_CRUISE]={env['ECHOGRAM_GROUP_OUTPUTS_BY_CRUISE']}")
             print(f"  Env[ECHOGRAM_FIGURES_DIR]={env['ECHOGRAM_FIGURES_DIR']}")
 
         run_start = time.perf_counter()

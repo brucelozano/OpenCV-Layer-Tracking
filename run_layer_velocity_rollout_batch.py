@@ -104,7 +104,8 @@ def main() -> int:
         env["ECHOGRAM_INPUT_FILE"] = str(input_csv)
         env["ECHOGRAM_DATASET_NAME"] = dataset_name
         env["ECHOGRAM_CRUISE_NAME"] = cruise_name
-        env["ECHOGRAM_FIGURES_DIR"] = str(run_output_dir)
+        env["ECHOGRAM_GROUP_OUTPUTS_BY_CRUISE"] = "1"
+        env["ECHOGRAM_FIGURES_DIR"] = str(output_root)
         env["ECHOGRAM_ENABLE_LAYER_REVIEW"] = "0"
         env["ECHOGRAM_LOAD_REVIEWED_CONTOURS"] = "1"
         env["ECHOGRAM_SKIP_LAYER_REVIEW_IF_LOADED"] = "1"

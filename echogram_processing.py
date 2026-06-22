@@ -185,6 +185,10 @@ TIME_AXIS_MODE = normalize_time_axis_mode(
     os.getenv("ECHOGRAM_TIME_AXIS_MODE", TIME_AXIS_MODE),
     context_label="ECHOGRAM_TIME_AXIS_MODE",
 )
+GROUP_OUTPUTS_BY_CRUISE = get_env_bool(
+    "ECHOGRAM_GROUP_OUTPUTS_BY_CRUISE",
+    GROUP_OUTPUTS_BY_CRUISE,
+)
 ENABLE_LAYER_REVIEW = get_env_bool("ECHOGRAM_ENABLE_LAYER_REVIEW", ENABLE_LAYER_REVIEW)
 SAVE_REVIEWED_CONTOURS = get_env_bool("ECHOGRAM_SAVE_REVIEWED_CONTOURS", SAVE_REVIEWED_CONTOURS)
 LOAD_REVIEWED_CONTOURS = get_env_bool("ECHOGRAM_LOAD_REVIEWED_CONTOURS", LOAD_REVIEWED_CONTOURS)
@@ -288,28 +292,31 @@ def setup_figure_directory():
     Resolve the output directory for figure artifacts.
 
     Behavior:
-    - If ECHOGRAM_FIGURES_DIR is provided (batch mode), use it as-is.
-    - Otherwise:
-      - If cruise grouping is enabled and cruise is resolved, write to
-        Figures/<CRUISE_NAME>/<DATASET_NAME>.
-      - Else, write to Figures/<DATASET_NAME>.
+    - If ECHOGRAM_FIGURES_DIR is provided, treat it as the base output root.
+      Cruise/dataset auto-grouping still applies under that root.
+    - If ECHOGRAM_FIGURES_DIR is not provided, default root is ./Figures.
+    - If cruise grouping is enabled and cruise is resolved, write to
+      <root>/<CRUISE_NAME>/<DATASET_NAME>.
+    - Else, write to <root>/<DATASET_NAME>.
     """
     figures_dir_override = os.getenv("ECHOGRAM_FIGURES_DIR")
-    if figures_dir_override:
-        figures_dir = figures_dir_override
+    if figures_dir_override and str(figures_dir_override).strip():
+        base_figures_dir = os.path.abspath(os.path.expanduser(str(figures_dir_override).strip()))
+        print(f"Using custom figures root directory: {base_figures_dir}")
     else:
         base_figures_dir = os.path.join(os.getcwd(), 'Figures')
-        cruise_name = detect_cruise_name(FILE_PATH, DATASET_NAME) if GROUP_OUTPUTS_BY_CRUISE else None
-        if cruise_name:
-            figures_dir = os.path.join(base_figures_dir, cruise_name, DATASET_NAME)
-            print(f"Resolved cruise folder: {cruise_name}")
-        else:
-            figures_dir = os.path.join(base_figures_dir, DATASET_NAME)
-            if GROUP_OUTPUTS_BY_CRUISE:
-                print("Cruise folder not resolved; using dataset-only output folder.")
+
+    cruise_name = detect_cruise_name(FILE_PATH, DATASET_NAME) if GROUP_OUTPUTS_BY_CRUISE else None
+    if cruise_name:
+        figures_dir = os.path.join(base_figures_dir, cruise_name, DATASET_NAME)
+        print(f"Resolved cruise folder: {cruise_name}")
+    else:
+        figures_dir = os.path.join(base_figures_dir, DATASET_NAME)
+        if GROUP_OUTPUTS_BY_CRUISE:
+            print("Cruise folder not resolved; using dataset-only output folder.")
     if not os.path.exists(figures_dir):
         os.makedirs(figures_dir)
-        print(f"Created Figures directory at: {figures_dir}")
+        print(f"Created output directory at: {figures_dir}")
     return figures_dir
 
 # Get the figures directory path
