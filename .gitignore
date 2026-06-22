@@ -16,6 +16,14 @@ params_*.py
 DP09_CTD_params/
 EV DVM Params/
 
+# Test assets to include in repo
+!test_params/
+!test_params/**/
+!test_params/**/*.py
+!test_csvs/
+!test_csvs/**/
+!test_csvs/**/*.sv.csv
+
 # Input data (excluded for first code-only upload)
 EV DVM Echograms/
 
@@ -24,6 +32,7 @@ Figures/
 Batch Results/
 DP08 Figures/
 DP09 Figures/
+test_outputs/
 
 # Local-only helper scripts (kept on machine, not uploaded)
 sv_csv_echogram_reader.py

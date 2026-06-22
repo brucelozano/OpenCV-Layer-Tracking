@@ -64,6 +64,25 @@ Optional module-based load:
 ECHOGRAM_PARAMS_MODULE="params_B082D_CTD255" python echogram_processing.py
 ```
 
+### Running Test Fixtures (`test_params` + `test_csvs`)
+
+If you keep lightweight test inputs in `test_csvs/` and matching params in
+`test_params/`, run with a params file path:
+
+```bash
+ECHOGRAM_PARAMS_FILE="test_params/DP03/params_DP03_B082N_18kHz.py" ECHOGRAM_FIGURES_DIR="test_outputs" python echogram_processing.py
+```
+
+Output path behavior:
+
+- With cruise resolved: `test_outputs/<CRUISE>/<DATASET>/`
+- Without cruise resolved: `test_outputs/<DATASET>/`
+
+Notes:
+
+- `ECHOGRAM_FIGURES_DIR` is treated as the output root.
+- `test_outputs/` is intended for local generated artifacts and is git-ignored.
+
 Common runtime overrides:
 
 - `ECHOGRAM_PARAMS_FILE`
@@ -72,7 +91,11 @@ Common runtime overrides:
 - `ECHOGRAM_DATASET_NAME`
 - `ECHOGRAM_CRUISE_NAME`
 - `ECHOGRAM_FIGURES_DIR`
+- `ECHOGRAM_GROUP_OUTPUTS_BY_CRUISE`
 - `ECHOGRAM_TIME_AXIS_MODE`
+
+`ECHOGRAM_FIGURES_DIR` is treated as the output root (replacement for `./Figures`),
+while cruise/dataset auto-folder logic still applies under that root.
 
 Review/runtime toggles:
 
