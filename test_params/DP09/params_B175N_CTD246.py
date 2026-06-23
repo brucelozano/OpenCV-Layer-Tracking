@@ -67,7 +67,7 @@ DSL_MORPH_OPEN_ITERATIONS = 1   # Disabled to preserve layer separation
 # Toggle CSV export to save runtime during shape tuning.
 EXPORT_BOOLEAN_CSV = False
 # --- Parameters for Second Pass (Diffuse Layers) ---
-ENABLE_SECOND_PASS = True  # Flag to enable/disable second pass detection
+ENABLE_SECOND_PASS = False  # Flag to enable/disable second pass detection
 
 # Second Pass Ping Range (Can be different from first pass)
 SECOND_PASS_START_PING = None  # If None, uses START_PING
