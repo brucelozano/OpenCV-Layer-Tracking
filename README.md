@@ -158,13 +158,13 @@ Default artifact location:
 Behavior:
 
 1. First reviewed run (artifact missing):
-   - review UI opens (if enabled)
-   - press `s` to accept edits
-   - artifact is written when save is enabled
+  - review UI opens (if enabled)
+  - press `s` to accept edits
+  - artifact is written when save is enabled
 2. Re-run with valid artifact:
-   - contours load from artifact
-   - review UI can be skipped
-   - plots/metrics are recomputed from loaded contours
+  - contours load from artifact
+  - review UI can be skipped
+  - plots/metrics are recomputed from loaded contours
 
 If artifact metadata does not match run context (dataset, ping/depth ranges, image shapes), the load is rejected and the pipeline falls back safely.
 
@@ -191,13 +191,13 @@ Default batch output structure:
 
 ## Workflow 3: Layer-Velocity Rollout + Cross-Dataset Summary
 
-1) Headless rollout over configured datasets:
+1. Headless rollout over configured datasets:
 
 ```bash
 python run_layer_velocity_rollout_batch.py
 ```
 
-2) Cross-dataset aggregation/plots:
+1. Cross-dataset aggregation/plots:
 
 ```bash
 python cross_dataset_dvm_summary.py
