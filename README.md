@@ -20,6 +20,7 @@ In practice, you can run the code when you supply your own params files and `.sv
 - `layer_review.py`: interactive contour review/edit UI.
 - `batch_echogram_processing.py`: batch launcher for many `.sv.csv` files.
 - `batch_master_config.py`: batch defaults and per-dataset params resolution.
+- `sv_csv_loader.py`: shared `.sv.csv` loader with strict/ragged parsing modes.
 - `run_layer_velocity_rollout_batch.py`: headless rerun pipeline using reviewed contours.
 - `layer_velocity_rollout_config.py`: rollout dataset manifest and rollout path settings.
 - `cross_dataset_dvm_summary.py`: aggregate rollout outputs into cross-dataset CSVs/figures.
@@ -64,6 +65,21 @@ Optional module-based load:
 ECHOGRAM_PARAMS_MODULE="params_B082D_CTD255" python echogram_processing.py
 ```
 
+Windows shell equivalents for params-file runs:
+
+PowerShell:
+
+```powershell
+$env:ECHOGRAM_PARAMS_FILE = "path/to/params_dataset.py"
+python .\echogram_processing.py
+```
+
+Command Prompt (`cmd.exe`):
+
+```cmd
+set ECHOGRAM_PARAMS_FILE=path/to/params_dataset.py && python echogram_processing.py
+```
+
 ### Running Test Fixtures (`test_params` + `test_csvs`)
 
 If you keep lightweight test inputs in `test_csvs/` and matching params in
@@ -71,6 +87,20 @@ If you keep lightweight test inputs in `test_csvs/` and matching params in
 
 ```bash
 ECHOGRAM_PARAMS_FILE="test_params/DP03/params_DP03_B082N_18kHz.py" ECHOGRAM_FIGURES_DIR="test_outputs" python echogram_processing.py
+```
+
+PowerShell equivalent:
+
+```powershell
+$env:ECHOGRAM_PARAMS_FILE = "test_params/DP03/params_DP03_B082N_18kHz.py"
+$env:ECHOGRAM_FIGURES_DIR = "test_outputs"
+python .\echogram_processing.py
+```
+
+Command Prompt (`cmd.exe`) equivalent:
+
+```cmd
+set ECHOGRAM_PARAMS_FILE=test_params/DP03/params_DP03_B082N_18kHz.py && set ECHOGRAM_FIGURES_DIR=test_outputs && python echogram_processing.py
 ```
 
 Output path behavior:
@@ -93,9 +123,18 @@ Common runtime overrides:
 - `ECHOGRAM_FIGURES_DIR`
 - `ECHOGRAM_GROUP_OUTPUTS_BY_CRUISE`
 - `ECHOGRAM_TIME_AXIS_MODE`
+- `ECHOGRAM_SAMPLE_COLUMN_MODE` (`auto`, `strict`, `ragged`)
 
 `ECHOGRAM_FIGURES_DIR` is treated as the output root (replacement for `./Figures`),
 while cruise/dataset auto-folder logic still applies under that root.
+
+`ECHOGRAM_SAMPLE_COLUMN_MODE` controls how `.sv.csv` sample columns are parsed:
+
+- `auto` (default): tries strict fixed-width parsing first and falls back to ragged parsing
+  if row widths vary.
+- `strict`: preserves original parser behavior (fastest, requires stable row width).
+- `ragged`: always uses row-wise parsing and validates each row against
+  `fixed_columns + Sample_count`.
 
 Review/runtime toggles:
 

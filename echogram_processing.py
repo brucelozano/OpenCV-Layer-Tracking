@@ -9,6 +9,7 @@ import importlib
 import re
 import json
 import shutil
+from sv_csv_loader import load_echoview_sv_csv, normalize_sample_column_mode
 pyplot.rcParams['figure.dpi'] = 800
 pyplot.rcParams['savefig.dpi'] = 800
 
@@ -177,6 +178,10 @@ WAVELET_THRESHOLD_SCALE = float(getattr(params_module, "WAVELET_THRESHOLD_SCALE"
 WAVELET_CLIP_MIN = float(getattr(params_module, "WAVELET_CLIP_MIN", -90.0))
 WAVELET_CLIP_MAX = float(getattr(params_module, "WAVELET_CLIP_MAX", -30.0))
 WAVELET_APPLY_TO_SECOND_PASS = getattr(params_module, "WAVELET_APPLY_TO_SECOND_PASS", False)
+SAMPLE_COLUMN_MODE = normalize_sample_column_mode(
+    getattr(params_module, "SAMPLE_COLUMN_MODE", "auto"),
+    context_label="SAMPLE_COLUMN_MODE",
+)
 
 # Allow runtime override so batch mode can apply any params module to any input file.
 FILE_PATH = os.getenv("ECHOGRAM_INPUT_FILE", FILE_PATH)
@@ -221,6 +226,10 @@ WAVELET_CLIP_MAX = get_env_float("ECHOGRAM_WAVELET_CLIP_MAX", WAVELET_CLIP_MAX)
 WAVELET_APPLY_TO_SECOND_PASS = get_env_bool(
     "ECHOGRAM_WAVELET_APPLY_SECOND_PASS",
     WAVELET_APPLY_TO_SECOND_PASS,
+)
+SAMPLE_COLUMN_MODE = normalize_sample_column_mode(
+    os.getenv("ECHOGRAM_SAMPLE_COLUMN_MODE", SAMPLE_COLUMN_MODE),
+    context_label="ECHOGRAM_SAMPLE_COLUMN_MODE",
 )
 
 # Extract dataset name from the parameter file being used
@@ -340,19 +349,14 @@ def load_and_preprocess_echogram(file_path, reset_ping_index):
         'Depth_start', 'Depth_stop', 'Range_start', 'Range_stop', 'Sample_count'
     ]
 
-    # Read only the Sample_count column for analysis
-    initial_data = pd.read_csv(file_path, usecols=fixed_column_names)
-    max_samples = int(initial_data['Sample_count'].max())
-    print(f"Maximum number of sample columns: {max_samples}\n")
-
-    # Generate sample column names based on the determined sample count
-    sample_column_names = ['Sample_' + str(i) for i in range(1, max_samples + 1)]
-
-    # Combine the fixed and sample column names for full DataFrame reading
-    column_names = fixed_column_names + sample_column_names
-
-    # Read the full CSV with the correct number of columns
-    echogram = pd.read_csv(file_path, names=column_names, header=0, low_memory=False)
+    echogram, max_samples, resolved_sample_mode = load_echoview_sv_csv(
+        file_path,
+        fixed_column_names=fixed_column_names,
+        sample_column_mode=SAMPLE_COLUMN_MODE,
+        low_memory=False,
+    )
+    print(f"Maximum number of sample columns: {max_samples}")
+    print(f"Sample column parser mode: {resolved_sample_mode}\n")
 
     # Store original start and end ping indices
     original_start_ping = echogram['Ping_index'].iloc[0]

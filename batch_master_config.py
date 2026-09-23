@@ -65,6 +65,11 @@ dmax = None
 drange = 10
 USE_TIME_X_AXIS = True
 TIME_AXIS_MODE = "linear"  # "true_time" or "linear"
+# Sample-column parser mode:
+# - "auto": try strict parser first, fallback to ragged parser on mismatch
+# - "strict": keep original fixed-width parser behavior
+# - "ragged": always use row-wise parser with Sample_count validation
+SAMPLE_COLUMN_MODE = "auto"
 GROUP_OUTPUTS_BY_CRUISE = True
 CRUISE_NAME = None
 
