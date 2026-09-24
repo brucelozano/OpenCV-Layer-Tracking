@@ -37,3 +37,20 @@ test_outputs/
 # Local-only helper scripts (kept on machine, not uploaded)
 sv_csv_echogram_reader.py
 test_csv_outputs.py
+
+# Local troubleshooting datasets/results (keep off source control)
+Problematic_Files/
+Problematic_Params/
+problematic_batch_results/
+problematic_batch_results_fixed/
+problematic_reader_outputs/
+problematic_test_outputs_baseline/
+problematic_test_outputs_fixed/
+problematic_test_outputs_postfix_baseline/
+problematic_test_outputs_smoke/
+
+# Local test additions (machine-specific)
+test_params/PC7/
+test_csvs/PC7/
+test_csvs/ragged/
+test_sv_csv_loader_modes.py
